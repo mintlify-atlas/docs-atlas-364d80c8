@@ -1,5 +1,5 @@
 ---
-title: "Configure ms-alumnos environment variables"
+title: "ms-alumnos environment variable configuration reference"
 sidebarTitle: "Configuration"
 description: "Full reference for all ms-alumnos environment variables including NATS server URLs, PostgreSQL connection settings, and service port."
 ---
@@ -35,7 +35,7 @@ DB_PORT=5435
 ## Variable reference
 
 <ParamField query="PORT" type="number" required>
-  The port number the NestJS process binds to internally. Because `ms-alumnos` is a pure NATS microservice (no HTTP listener), this value is used by the NestJS runtime internals rather than exposed on a TCP socket to clients.
+  Validated and exported by `envs.ts` but not used to open an HTTP listener — `ms-alumnos` is a pure NATS microservice and has no HTTP server. The variable must be present and numeric for startup validation to pass.
 
   **Default (from example):** `3002`
 </ParamField>

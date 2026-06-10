@@ -128,6 +128,10 @@ The updated `Alumno` entity reflecting all applied changes.
   Whether the student graduated locally.
 </ResponseField>
 
+<Note>
+  The response includes a `contrasena` field containing the stored value of the student's password (a bcrypt hash for unmodified passwords, or plaintext if `contrasena` was included in this update — see the warning below). Callers should discard or ignore this field.
+</Note>
+
 ## Example
 
 ```typescript

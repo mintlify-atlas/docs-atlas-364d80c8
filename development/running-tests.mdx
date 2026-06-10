@@ -1,7 +1,7 @@
 ---
-title: "Running tests in ms-alumnos"
+title: "Unit and end-to-end tests in ms-alumnos microservice"
 sidebarTitle: "Tests"
-description: "How to run unit tests and end-to-end tests for ms-alumnos using Jest and the NestJS testing utilities."
+description: "How to run unit and end-to-end tests for ms-alumnos using Jest, ts-jest, and the NestJS testing utilities — including coverage reports."
 ---
 
 ms-alumnos uses [Jest](https://jestjs.io/) as its test runner for both unit tests and end-to-end (e2e) tests. Unit tests are configured through the `jest` section inside `package.json` and live alongside their source files under `src/`. End-to-end tests use a separate configuration file at `test/jest-e2e.json` and live in the `test/` directory.

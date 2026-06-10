@@ -68,7 +68,7 @@ Send a `create_alumno` message to register a new student in the system. The serv
 
 ## Response
 
-The full `Alumno` entity is returned after a successful insert. Note that `contrasena` is **not** included in the response.
+The full `Alumno` entity is returned after a successful insert.
 
 <ResponseField name="alumnoId" type="number">
   Auto-generated primary key for the newly created student record.
@@ -121,6 +121,10 @@ The full `Alumno` entity is returned after a successful insert. Note that `contr
 <ResponseField name="egresadoLocal" type="boolean">
   Whether the student graduated locally. Defaults to `true`.
 </ResponseField>
+
+<Note>
+  The `contrasena` field **is** present in the returned entity object, but its value is the bcrypt hash — not the original plaintext. Callers should discard or ignore this field; never display or forward the hash to end users.
+</Note>
 
 ## Example
 

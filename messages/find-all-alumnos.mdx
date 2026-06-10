@@ -82,6 +82,10 @@ Send a `find_all_alumnos` message to retrieve a paginated list of student record
   The page size used to produce this response.
 </ResponseField>
 
+<Note>
+  Each `Alumno` object in `data` includes a `contrasena` field containing the bcrypt hash of the student's password. Callers should discard or ignore this field; never display or forward the hash to end users.
+</Note>
+
 ## Example
 
 ```typescript

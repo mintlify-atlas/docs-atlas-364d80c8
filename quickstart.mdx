@@ -1,7 +1,7 @@
 ---
-title: "Get started with ms-alumnos in 5 minutes"
+title: "Run ms-alumnos locally with Docker Compose and NATS"
 sidebarTitle: "Quickstart"
-description: "Learn how to install, configure, and run ms-alumnos locally using Docker Compose and NATS in under 5 minutes."
+description: "Clone, configure, and boot ms-alumnos locally in under 5 minutes. Covers Yarn setup, Docker Compose PostgreSQL, NATS server, and your first message."
 ---
 
 This guide walks you through cloning the repository, configuring your environment, starting a local PostgreSQL database via Docker Compose, and sending your first `create_alumno` message over NATS — all in about five minutes. By the end you will have a fully running instance of `ms-alumnos` ready to accept requests from any NATS publisher.
@@ -22,7 +22,7 @@ This guide walks you through cloning the repository, configuring your environmen
     docker run -p 4222:4222 nats:latest
     ```
 
-    Leave this terminal open (or run with `-d` to detach). `ms-alumnos` will connect to `nats://localhost:4222` by default.
+    Leave this terminal open (or run with `-d` to detach). `ms-alumnos` will connect to `nats://localhost:4222` when `NATS_SERVERS` is set to that address.
   </Step>
 
   <Step title="Install Yarn">
@@ -76,7 +76,7 @@ This guide walks you through cloning the repository, configuring your environmen
 
     | Variable | Default | Notes |
     |---|---|---|
-    | `PORT` | `3002` | Internal port used by the service. |
+    | `PORT` | `3002` | Validated at startup by `envs.ts` but not used to open an HTTP port — the service is NATS-only. |
     | `NATS_SERVERS` | `nats://localhost:4222,nats://localhost:4223` | Comma-separated list of NATS server URLs. |
     | `DB_HOST` | `localhost` | Must match where your Docker container is reachable. |
     | `DB_PORT` | `5435` | Mapped host port for the PostgreSQL container (container internally uses 5432). |
@@ -107,12 +107,10 @@ This guide walks you through cloning the repository, configuring your environmen
     yarn start:dev
     ```
 
-    On successful startup, NestJS prints the NATS servers the service connected to:
+    On successful startup, NestJS logs the NATS servers the service connected to:
 
     ```
-    [Nest] LOG [NestFactory] Starting Nest application...
-    [Nest] LOG [NestApplication] Nest microservice successfully started
-    [Nest] LOG [Bootstrap] Alumnos microservice running on NATS servers: nats://localhost:4222, nats://localhost:4223
+    [Bootstrap] Alumnos microservice running on NATS servers: nats://localhost:4222, nats://localhost:4223
     ```
 
     The service is now listening for NATS message patterns. No HTTP port is opened — all traffic is NATS-only.
@@ -121,14 +119,14 @@ This guide walks you through cloning the repository, configuring your environmen
   <Step title="Send your first message">
     Use the [`nats`](https://www.npmjs.com/package/nats) npm package to publish a `create_alumno` request and inspect the response. Create a temporary file (e.g. `test-create.mjs`) with the following content:
 
-    ```typescript
+    ```javascript
     import { connect, JSONCodec } from 'nats';
 
     const nc = await connect({ servers: 'nats://localhost:4222' });
     const jc = JSONCodec();
 
     const response = await nc.request(
-      'create_alumno',   // note: NATS subject matches the cmd
+      'create_alumno',
       jc.encode({
         nombre: 'Juan',
         apellidoPaterno: 'García',

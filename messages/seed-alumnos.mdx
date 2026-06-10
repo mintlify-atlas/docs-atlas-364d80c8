@@ -1,7 +1,7 @@
 ---
-title: "seed_alumnos — Reset and seed the database"
-sidebarTitle: "seed_alumnos"
-description: "NATS message pattern to truncate the alumnos table and load 100 sample student records. Returns count of inserted records."
+title: "seed_alumnos — Reset and Re-seed the Alumnos Database"
+sidebarTitle: "Seed Alumnos"
+description: "Destructive NATS message that resets the alumnos table via TRUNCATE and bulk-inserts 100 bcrypt-hashed student records into PostgreSQL."
 ---
 
 The `seed_alumnos` message pattern is exposed by `SeedController` and delegates to `SeedService.runSeed()`. When invoked, it issues a raw SQL `TRUNCATE TABLE "alumnos" RESTART IDENTITY CASCADE` to wipe all existing student records and reset the auto-increment primary key counter back to 1, then constructs and saves 100 pre-defined sample `Alumno` entities in a single `repository.save()` call. Because each entity passes through the `@BeforeInsert()` lifecycle hook, every sample student's password is bcrypt-hashed before it lands in the database.

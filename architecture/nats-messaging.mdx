@@ -12,7 +12,7 @@ description: "How ms-alumnos uses NATS as its sole transport: message patterns, 
 
 Every student operation is exposed via the `@MessagePattern` decorator with a `cmd` discriminator. When a NATS message arrives whose subject matches a registered pattern, NestJS dispatches it to the corresponding handler in `AlumnosController`.
 
-The following six commands are available:
+The following five commands are available:
 
 | `cmd` value | Handler | Description |
 |---|---|---|

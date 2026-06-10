@@ -1,5 +1,5 @@
 ---
-title: "Seed the database with sample student records"
+title: "Seeding the database with 100 sample student records"
 sidebarTitle: "Database Seed"
 description: "Use the seed_alumnos NATS message to load 100 sample student records into PostgreSQL, resetting the alumnos table for a clean development state."
 ---
@@ -62,7 +62,7 @@ import { connect, JSONCodec } from 'nats';
 const nc = await connect({ servers: 'nats://localhost:4222' });
 const jc = JSONCodec();
 
-const res = await nc.request('seed_alumnos', jc.encode({}), { timeout: 10000 });
+const res = await nc.request('seed_alumnos', jc.encode({}), { timeout: 15000 });
 console.log(jc.decode(res.data));
 // { message: 'Seed ejecutado correctamente', count: 100 }
 
