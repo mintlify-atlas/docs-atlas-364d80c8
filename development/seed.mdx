@@ -1,0 +1,111 @@
+---
+title: "Seed the database with sample student records"
+sidebarTitle: "Database Seed"
+description: "Use the seed_alumnos NATS message to load 100 sample student records into PostgreSQL, resetting the alumnos table for a clean development state."
+---
+
+ms-alumnos ships with a dedicated seed module that gives developers an instant, repeatable starting point. Sending a single NATS message truncates the `alumnos` table and inserts 100 realistic student records so you can explore API behaviour, run manual tests, or hand-off a demo environment without crafting fixtures by hand.
+
+## How it works
+
+The seed feature is composed of three layers that work together:
+
+**`SeedController`** — registered as a NestJS microservice controller, it listens for the `{ cmd: 'seed_alumnos' }` message pattern and delegates immediately to `SeedService`:
+
+```typescript
+@Controller('seed')
+export class SeedController {
+  constructor(private readonly seedService: SeedService) {}
+
+  @MessagePattern({ cmd: 'seed_alumnos' })
+  runSeed() {
+    return this.seedService.runSeed();
+  }
+}
+```
+
+**`SeedService`** — contains the actual database logic. It first issues a raw `TRUNCATE` query to wipe existing rows and reset the sequence, then uses the TypeORM repository to bulk-create and save all 100 records from the static data array:
+
+```typescript
+@Injectable()
+export class SeedService {
+  constructor(
+    @InjectRepository(Alumno)
+    private readonly alumnoRepository: Repository<Alumno>,
+  ) {}
+
+  async runSeed() {
+    await this.alumnoRepository.query(`
+      TRUNCATE TABLE "alumnos" RESTART IDENTITY CASCADE
+    `);
+
+    const alumnos = seedAlumnosData.map((alumno) => {
+      return this.alumnoRepository.create(alumno);
+    });
+
+    await this.alumnoRepository.save(alumnos);
+
+    return { message: 'Seed ejecutado correctamente', count: alumnos.length };
+  }
+}
+```
+
+**`seedAlumnosData`** (`src/seed/data/sees.data.ts`) — a static array of 100 objects that conform to the `SeedAlumno` interface. Each object carries every field required by the `Alumno` entity so that TypeORM can persist them without additional transformation.
+
+## Running the seed
+
+Trigger the seed by publishing a NATS request to the `seed_alumnos` subject. Any NATS client works; the example below uses the official `nats` npm package:
+
+```typescript
+import { connect, JSONCodec } from 'nats';
+
+const nc = await connect({ servers: 'nats://localhost:4222' });
+const jc = JSONCodec();
+
+const res = await nc.request('seed_alumnos', jc.encode({}), { timeout: 10000 });
+console.log(jc.decode(res.data));
+// { message: 'Seed ejecutado correctamente', count: 100 }
+
+await nc.drain();
+```
+
+A successful run returns the object `{ message: 'Seed ejecutado correctamente', count: 100 }`. The `count` field always reflects the number of rows actually saved, which makes it easy to assert correctness in automated scripts.
+
+<Tip>
+  Run the seed right after starting a fresh database or after running end-to-end tests to restore a known, consistent state before the next test pass.
+</Tip>
+
+## Sample data overview
+
+The 100 seed records are spread across four Peruvian universities and a variety of faculties and degree levels, giving a representative cross-section of student data:
+
+| Field | Range / Values |
+|---|---|
+| `dni` | `10000001` – `10000100` (sequential) |
+| `edad` | 24 – 35 |
+| `universidad` | UNMSM, UNI, PUCP, USMP |
+| `grado` | Bachiller, Licenciado, Magíster, Doctor |
+| `egresadoLocal` | `true` or `false` |
+
+University coverage across the dataset:
+
+- **UNMSM** — largest group, primarily from FISI (Ing. Sistemas, Ing. Software) and faculties of Medicina, Psicología, Ciencias, and Letras.
+- **UNI** — engineering-focused: Ing. Civil, Mecánica, Electrónica, Mecatrónica, Ambiental, Química, Eléctrica, and Industrial.
+- **PUCP** — diverse: Derecho, Economía, Psicología, Ciencias Sociales, Arquitectura, Arte, and Ciencias.
+- **USMP** — Medicina, Derecho, Contabilidad, Administración, Comunicación, and Psicología.
+
+Every record uses `@example.com` email addresses and the placeholder password `contrasena`. Do not use these records in a production environment.
+
+## Reset behavior
+
+The seed service executes the following SQL before inserting new rows:
+
+```sql
+TRUNCATE TABLE "alumnos" RESTART IDENTITY CASCADE
+```
+
+`RESTART IDENTITY` resets the PostgreSQL auto-increment sequence back to `1`, so the primary keys assigned to the new seed records always start from a predictable value. `CASCADE` ensures that any foreign-key relationships that reference the `alumnos` table are also cleaned up automatically.
+
+<Warning>
+  Running the seed **permanently deletes all existing records** in the `alumnos` table — including any data you created manually or through API calls. There is no undo. Do not run this against a shared or production database.
+</Warning>

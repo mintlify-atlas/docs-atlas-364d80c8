@@ -1,0 +1,55 @@
+---
+title: "remove_alumno — Delete a student record by ID"
+sidebarTitle: "remove_alumno"
+description: "NATS message pattern to permanently delete an alumno record by ID. Returns a confirmation message or 404 if the record does not exist."
+---
+
+Send a `remove_alumno` message to permanently delete a student record from the database. The controller extracts the `id` from the payload via `ParseIntPipe` and passes it to the service, which calls TypeORM's `delete` method directly by primary key. If no row is affected (i.e. `result.affected === 0`), the service throws an `RpcException` with HTTP status `404`. There is no soft-delete — the record is gone immediately.
+
+## Message pattern
+
+```json
+{ "cmd": "remove_alumno" }
+```
+
+## Request payload
+
+<ParamField body="id" type="number" required>
+  The numeric `alumnoId` of the student record to delete. Must be a positive integer.
+</ParamField>
+
+## Response
+
+<ResponseField name="message" type="string">
+  A confirmation string in the format `Alumno #${id} removed successfully` (e.g. `"Alumno #5 removed successfully"`).
+</ResponseField>
+
+## Example
+
+```typescript
+import { connect, JSONCodec } from 'nats';
+
+const nc = await connect({ servers: 'nats://localhost:4222' });
+const jc = JSONCodec();
+
+const res = await nc.request(
+  'remove_alumno',
+  jc.encode({ id: 5 }),
+  { timeout: 5000 }
+);
+
+console.log(jc.decode(res.data));
+// { message: 'Alumno #5 removed successfully' }
+await nc.drain();
+```
+
+## Errors
+
+| Status | Cause |
+|--------|-------|
+| `404`  | No alumno exists with the given `id`. The exception payload is `{ "status": 404, "message": "Alumno #5 not found" }` (where `5` is the requested ID). |
+| `400`  | The `id` field is missing or cannot be parsed as a valid integer by `ParseIntPipe`. |
+
+<Warning>
+  Deletion is **permanent**. There is no soft-delete mechanism or recycle bin in this service. Once removed, the record cannot be recovered from the database. Always verify you have the correct `alumnoId` before calling this pattern.
+</Warning>

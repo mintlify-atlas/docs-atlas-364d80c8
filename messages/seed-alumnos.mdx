@@ -1,0 +1,76 @@
+---
+title: "seed_alumnos — Reset and seed the database"
+sidebarTitle: "seed_alumnos"
+description: "NATS message pattern to truncate the alumnos table and load 100 sample student records. Returns count of inserted records."
+---
+
+The `seed_alumnos` message pattern is exposed by `SeedController` and delegates to `SeedService.runSeed()`. When invoked, it issues a raw SQL `TRUNCATE TABLE "alumnos" RESTART IDENTITY CASCADE` to wipe all existing student records and reset the auto-increment primary key counter back to 1, then constructs and saves 100 pre-defined sample `Alumno` entities in a single `repository.save()` call. Because each entity passes through the `@BeforeInsert()` lifecycle hook, every sample student's password is bcrypt-hashed before it lands in the database.
+
+## Message pattern
+
+```json
+{ "cmd": "seed_alumnos" }
+```
+
+## Request payload
+
+This message takes no meaningful payload. Send an empty object or omit the body entirely.
+
+<ParamField body="(none)" type="undefined">
+  No parameters are required or accepted. The seed data is entirely pre-defined
+  in `src/seed/data/sees.data.ts`.
+</ParamField>
+
+## Response
+
+<ResponseField name="message" type="string">
+  A fixed confirmation string: `'Seed ejecutado correctamente'`.
+</ResponseField>
+
+<ResponseField name="count" type="number">
+  The number of student records inserted. This is always `100` when using the
+  default seed dataset shipped with the service.
+</ResponseField>
+
+## Example
+
+```typescript
+import { connect, JSONCodec } from 'nats';
+
+const nc = await connect({ servers: 'nats://localhost:4222' });
+const jc = JSONCodec();
+
+const res = await nc.request(
+  'seed_alumnos',
+  jc.encode({}),
+  { timeout: 15000 } // Allow extra time for 100 inserts
+);
+
+console.log(jc.decode(res.data));
+// { message: 'Seed ejecutado correctamente', count: 100 }
+
+await nc.drain();
+```
+
+## What gets seeded
+
+The 100 sample students are statically defined in `src/seed/data/sees.data.ts` and cover a realistic cross-section of Peruvian university profiles:
+
+| Attribute       | Values present in seed data                                                                              |
+| --------------- | -------------------------------------------------------------------------------------------------------- |
+| **Universities** | UNMSM, UNI, PUCP, USMP                                                                                  |
+| **Faculties**   | FISI, Facultad de Medicina, Facultad de Derecho, Facultad de Psicología, Facultad de Ingeniería, Facultad de Ciencias, and many others |
+| **Degrees**     | Bachiller, Licenciado, Magíster, Doctor                                                                  |
+| **DNIs**        | Sequential integers from `10000001` through `10000100` (8-digit strings)                               |
+| **Emails**      | `<first>.<last>@example.com` pattern (unique per record)                                                |
+| **Celular**     | `900000001` through `900000100`                                                                          |
+| **Ages**        | Range from 24 to 35                                                                                     |
+| **Password**    | Every record has a plain-text `contrasena` of `'contrasena'`, which is bcrypt-hashed at 10 rounds via the `@BeforeInsert()` hook before the row is written to the database |
+
+<Warning>
+  **This operation is destructive.** `TRUNCATE TABLE "alumnos" RESTART IDENTITY CASCADE`
+  permanently deletes **all** existing rows in the `alumnos` table and resets the
+  auto-increment ID counter to 1 before inserting the 100 sample records. Any
+  real student data in the table will be irreversibly lost. Do **not** run
+  `seed_alumnos` in a production environment that holds real data.
+</Warning>

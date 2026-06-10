@@ -1,0 +1,166 @@
+---
+title: "create_alumno — Create a new student record"
+sidebarTitle: "create_alumno"
+description: "NATS message pattern to create a new alumno. Accepts CreateAlumnoDto, hashes the password with bcrypt, and persists to PostgreSQL."
+---
+
+Send a `create_alumno` message to register a new student in the system. The service validates all fields using `class-validator`, hashes the plaintext password with bcrypt (10 rounds) via a TypeORM `@BeforeInsert()` hook, and then persists the record to the `alumnos` PostgreSQL table. Both `dni` and `email` must be unique across all records.
+
+## Message pattern
+
+```json
+{ "cmd": "create_alumno" }
+```
+
+## Request payload
+
+<ParamField body="nombre" type="string" required>
+  First name of the student. Minimum 2 characters, maximum 50 characters.
+</ParamField>
+
+<ParamField body="apellidoPaterno" type="string" required>
+  Paternal surname. Minimum 2 characters, maximum 50 characters.
+</ParamField>
+
+<ParamField body="apellidoMaterno" type="string">
+  Maternal surname. Optional. Maximum 50 characters.
+</ParamField>
+
+<ParamField body="dni" type="string" required>
+  National ID number. Must be exactly 8 characters. Must be unique across all student records.
+</ParamField>
+
+<ParamField body="edad" type="number">
+  Age of the student. Optional. Must be an integer.
+</ParamField>
+
+<ParamField body="email" type="string" required>
+  Email address. Must be a valid email format. Maximum 100 characters. Must be unique across all student records.
+</ParamField>
+
+<ParamField body="celular" type="string">
+  Phone number. Optional. Maximum 15 characters.
+</ParamField>
+
+<ParamField body="universidad" type="string">
+  University name. Optional. Maximum 100 characters. Defaults to `'UNMSM'` if omitted.
+</ParamField>
+
+<ParamField body="facultad" type="string">
+  Faculty or school name. Optional. Maximum 100 characters.
+</ParamField>
+
+<ParamField body="profesion" type="string">
+  Profession. Optional. Maximum 50 characters.
+</ParamField>
+
+<ParamField body="grado" type="string">
+  Academic degree. Optional. Maximum 50 characters.
+</ParamField>
+
+<ParamField body="egresadoLocal" type="boolean">
+  Whether the student graduated from a local institution. Optional. Defaults to `true`.
+</ParamField>
+
+<ParamField body="contrasena" type="string" required>
+  Password in plaintext. Minimum 6 characters, maximum 60 characters. This value is hashed with bcrypt before storage — the plaintext is never persisted.
+</ParamField>
+
+## Response
+
+The full `Alumno` entity is returned after a successful insert. Note that `contrasena` is **not** included in the response.
+
+<ResponseField name="alumnoId" type="number">
+  Auto-generated primary key for the newly created student record.
+</ResponseField>
+
+<ResponseField name="nombre" type="string">
+  First name of the student.
+</ResponseField>
+
+<ResponseField name="apellidoPaterno" type="string">
+  Paternal surname.
+</ResponseField>
+
+<ResponseField name="apellidoMaterno" type="string">
+  Maternal surname. May be `null` if not provided.
+</ResponseField>
+
+<ResponseField name="dni" type="string">
+  National ID number (8 characters).
+</ResponseField>
+
+<ResponseField name="edad" type="number">
+  Age of the student. May be `null` if not provided.
+</ResponseField>
+
+<ResponseField name="email" type="string">
+  Email address.
+</ResponseField>
+
+<ResponseField name="celular" type="string">
+  Phone number. May be `null` if not provided.
+</ResponseField>
+
+<ResponseField name="universidad" type="string">
+  University name. Defaults to `'UNMSM'`.
+</ResponseField>
+
+<ResponseField name="facultad" type="string">
+  Faculty or school name. May be `null` if not provided.
+</ResponseField>
+
+<ResponseField name="profesion" type="string">
+  Profession. May be `null` if not provided.
+</ResponseField>
+
+<ResponseField name="grado" type="string">
+  Academic degree. May be `null` if not provided.
+</ResponseField>
+
+<ResponseField name="egresadoLocal" type="boolean">
+  Whether the student graduated locally. Defaults to `true`.
+</ResponseField>
+
+## Example
+
+```typescript
+import { connect, JSONCodec } from 'nats';
+
+const nc = await connect({ servers: 'nats://localhost:4222' });
+const jc = JSONCodec();
+
+const alumno = await nc.request(
+  'create_alumno',
+  jc.encode({
+    nombre: 'Juan',
+    apellidoPaterno: 'García',
+    apellidoMaterno: 'López',
+    dni: '12345678',
+    edad: 25,
+    email: 'juan.garcia@example.com',
+    celular: '987654321',
+    universidad: 'UNMSM',
+    facultad: 'FISI',
+    profesion: 'Ing. Sistemas',
+    grado: 'Bachiller',
+    egresadoLocal: true,
+    contrasena: 'miContrasena123',
+  }),
+  { timeout: 5000 }
+);
+
+console.log(jc.decode(alumno.data));
+await nc.drain();
+```
+
+## Errors
+
+| Status | Cause |
+|--------|-------|
+| `400`  | Validation failed — a required field is missing, a field exceeds its length constraint, `email` is not a valid email address, `dni` is not exactly 8 characters, or `contrasena` is shorter than 6 characters. |
+| `400`  | Unique constraint violation — the supplied `dni` or `email` already exists in the database. |
+
+<Note>
+  The `contrasena` field is hashed with bcrypt (10 rounds) via a TypeORM `@BeforeInsert()` hook before the record is saved. The plaintext password is never stored.
+</Note>

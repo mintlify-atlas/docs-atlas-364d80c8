@@ -1,0 +1,157 @@
+---
+title: "Error handling and RpcException propagation"
+sidebarTitle: "Error Handling"
+description: "How ms-alumnos maps validation errors, not-found errors, and unexpected exceptions to RpcException for consistent error propagation over NATS."
+---
+
+ms-alumnos uses a global `MicroserviceExceptionFilter` registered in `main.ts` to intercept every exception that escapes a message handler before it travels back across NATS. The filter converts whatever exception it receives into a typed `RpcException` so that callers always get a predictable error shape, regardless of whether the original problem was a validation failure, a missing record, or an unexpected runtime error.
+
+## MicroserviceExceptionFilter
+
+The filter is defined in `src/common/filters/microservice-exception.filter.ts` and implements NestJS's `ExceptionFilter` interface. It catches all exception types via the `@Catch()` decorator (no argument) and returns an RxJS `Observable` that emits the wrapped error:
+
+```typescript
+import {
+  Catch,
+  ExceptionFilter,
+  ArgumentsHost,
+  BadRequestException,
+  HttpException,
+} from '@nestjs/common';
+import { RpcException } from '@nestjs/microservices';
+import { Observable, throwError } from 'rxjs';
+
+interface ValidationErrorResponse {
+  statusCode: number;
+  message: string | string[];
+  error: string;
+}
+
+@Catch()
+export class MicroserviceExceptionFilter implements ExceptionFilter {
+  catch(exception: unknown, host: ArgumentsHost): Observable<never> {
+    console.log('Exception caught in microservice:', exception);
+
+    // Branch 1 — validation failures from class-validator
+    if (exception instanceof BadRequestException) {
+      const response = exception.getResponse() as ValidationErrorResponse;
+
+      let message = 'Validation failed';
+      if (typeof response === 'object' && response.message) {
+        if (Array.isArray(response.message)) {
+          message = response.message.join(', ');
+        } else {
+          message = response.message;
+        }
+      }
+
+      return throwError(
+        () =>
+          new RpcException({
+            status: exception.getStatus(),
+            message: message,
+          }),
+      );
+    }
+
+    // Branch 2 — already an RpcException, pass through unchanged
+    if (exception instanceof RpcException) {
+      return throwError(() => exception);
+    }
+
+    // Branch 3 — any other error
+    return throwError(
+      () =>
+        new RpcException({
+          status:
+            exception instanceof HttpException ? exception.getStatus() : 500,
+          message:
+            exception instanceof Error
+              ? exception.message
+              : 'Internal server error in microservice',
+        }),
+    );
+  }
+}
+```
+
+The filter follows three distinct branches:
+
+1. **`BadRequestException` (validation failures)** — NestJS's `ValidationPipe` throws a `BadRequestException` whose response body contains a `message` array of per-field error strings produced by class-validator. The filter extracts that array, joins the entries with `, `, and wraps the result in an `RpcException` that preserves the original HTTP status code (400).
+
+2. **`RpcException`** — if the exception is already an `RpcException` (thrown explicitly in service code), the filter passes it through unchanged with `throwError(() => exception)`. This prevents double-wrapping.
+
+3. **Any other error** — for any remaining exception type the filter constructs a new `RpcException`. The `status` is taken from `HttpException.getStatus()` if the exception is an HTTP exception; otherwise it defaults to `500`. The `message` is taken from `Error.message` if available, falling back to a generic string.
+
+## Service-level errors
+
+`AlumnosService` throws `RpcException` directly whenever a requested student record does not exist. This keeps not-found errors clean and explicit — no HTTP layer is involved:
+
+```typescript
+async findOne(id: number): Promise<Alumno> {
+  const alumno = await this.alumnoRepository.findOneBy({ alumnoId: id });
+
+  if (!alumno) {
+    throw new RpcException({
+      message: `Alumno #${id} not found`,
+      status: HttpStatus.NOT_FOUND,
+    });
+  }
+
+  return alumno;
+}
+```
+
+The same pattern is used in `update` and `remove`: if `alumnoRepository.preload()` returns `undefined` or `delete` affects zero rows, a 404 `RpcException` is thrown. Because the filter's second branch passes `RpcException` through unchanged, these errors reach the caller exactly as written.
+
+## Error response shape
+
+Every error that travels back over NATS has the following shape:
+
+```typescript
+{
+  status: number;  // HTTP status code (400, 404, 500, etc.)
+  message: string; // Human-readable error message
+}
+```
+
+| `status` | Meaning |
+|---|---|
+| `400` | Validation failure — one or more DTO fields failed class-validator rules |
+| `404` | Record not found — no `Alumno` with the given ID exists |
+| `500` | Unexpected server error |
+
+<Note>
+  Callers should inspect the `status` field in the error payload to determine how to handle the response — `400` indicates a problem with the request payload that the caller must fix, `404` means the resource does not exist, and `500` signals an internal problem on the microservice side.
+</Note>
+
+## Validation errors
+
+`AlumnosService` is protected by NestJS's `ValidationPipe`, configured with `whitelist: true` and `forbidNonWhitelisted: true`. This means:
+
+- **`whitelist: true`** — any property not declared in the DTO class is silently stripped before the handler runs.
+- **`forbidNonWhitelisted: true`** — if the stripped properties were present in the original payload, the pipe throws a `BadRequestException` rather than silently discarding them.
+
+Each DTO field is annotated with class-validator decorators (e.g. `@IsString()`, `@IsEmail()`, `@IsInt()`). When the pipe detects one or more violations it collects all error messages into an array and throws a single `BadRequestException`.
+
+**Example — sending a payload with a missing required field and an unknown property:**
+
+```typescript
+// Payload sent by the caller
+{
+  "nombre": "Juan",
+  // apellidoPaterno is missing (required)
+  "unknownField": "value"  // not declared in CreateAlumnoDto
+}
+```
+
+**Resulting error response:**
+
+```typescript
+{
+  "status": 400,
+  "message": "apellidoPaterno should not be empty, property unknownField should not exist"
+}
+```
+
+The `message` string is the join of all individual class-validator messages, separated by `, `. Callers can split on `, ` to display per-field feedback to end users.

@@ -1,47 +1,159 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get started with ms-alumnos in 5 minutes"
+sidebarTitle: "Quickstart"
+description: "Learn how to install, configure, and run ms-alumnos locally using Docker Compose and NATS in under 5 minutes."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+This guide walks you through cloning the repository, configuring your environment, starting a local PostgreSQL database via Docker Compose, and sending your first `create_alumno` message over NATS — all in about five minutes. By the end you will have a fully running instance of `ms-alumnos` ready to accept requests from any NATS publisher.
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+
+  <Step title="Prerequisites">
+    Make sure the following are available on your machine before you begin:
+
+    - **Node.js 18 or later** — [nodejs.org](https://nodejs.org)
+    - **Yarn** — installed in the next step if missing
+    - **Docker** — [docs.docker.com/get-docker](https://docs.docker.com/get-docker/)
+    - **A running NATS server** — [nats.io](https://nats.io)
+
+    The quickest way to spin up NATS locally is with Docker:
 
     ```bash
-    npm install your-package
+    docker run -p 4222:4222 nats:latest
     ```
+
+    Leave this terminal open (or run with `-d` to detach). `ms-alumnos` will connect to `nats://localhost:4222` by default.
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+
+  <Step title="Install Yarn">
+    If you do not have Yarn installed globally, add it now:
 
     ```bash
-    your-cli init
+    npm install --global yarn
     ```
-  </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+
+    Verify the installation:
 
     ```bash
-    your-cli start
+    yarn --version
     ```
   </Step>
+
+  <Step title="Clone and install dependencies">
+    Clone the repository and install all Node.js dependencies:
+
+    ```bash
+    git clone https://github.com/Distribuidos-Org/ms-alumnos.git
+    cd ms-alumnos
+    yarn install
+    ```
+
+    Yarn will resolve and cache all packages declared in `package.json`, including NestJS, TypeORM, the NATS client, bcrypt, and Joi.
+  </Step>
+
+  <Step title="Configure environment variables">
+    Copy the example environment file and open it in your editor:
+
+    ```bash
+    cp .env.example .env
+    ```
+
+    The default values work for a standard local setup. The full contents of `.env.example` are:
+
+    ```bash
+    PORT=3002
+    NATS_SERVERS="nats://localhost:4222,nats://localhost:4223"
+
+    DB_USER=postgres
+    DB_PASSWORD=postgres
+    DB_NAME=ms-alumnos-db
+
+    DB_HOST=localhost
+    DB_PORT=5435
+    ```
+
+    Key variables to review:
+
+    | Variable | Default | Notes |
+    |---|---|---|
+    | `PORT` | `3002` | Internal port used by the service. |
+    | `NATS_SERVERS` | `nats://localhost:4222,nats://localhost:4223` | Comma-separated list of NATS server URLs. |
+    | `DB_HOST` | `localhost` | Must match where your Docker container is reachable. |
+    | `DB_PORT` | `5435` | Mapped host port for the PostgreSQL container (container internally uses 5432). |
+
+    If you are only running a single NATS server, you can simplify `NATS_SERVERS` to just `nats://localhost:4222`.
+  </Step>
+
+  <Step title="Start PostgreSQL with Docker Compose">
+    The included `docker-compose.yml` defines a `postgres:15` service that reads its credentials and port directly from your `.env` file:
+
+    ```bash
+    docker compose up -d
+    ```
+
+    Docker will pull the `postgres:15` image (first run only), create a named volume `db_data` for persistence, and expose the database on the host port defined by `DB_PORT` (default `5435`). Verify the container is running:
+
+    ```bash
+    docker compose ps
+    ```
+
+    You should see the `db` service listed with a `running` status.
+  </Step>
+
+  <Step title="Start the microservice">
+    Launch `ms-alumnos` in watch mode so it reloads on code changes:
+
+    ```bash
+    yarn start:dev
+    ```
+
+    On successful startup, NestJS prints the NATS servers the service connected to:
+
+    ```
+    [Nest] LOG [NestFactory] Starting Nest application...
+    [Nest] LOG [NestApplication] Nest microservice successfully started
+    [Nest] LOG [Bootstrap] Alumnos microservice running on NATS servers: nats://localhost:4222, nats://localhost:4223
+    ```
+
+    The service is now listening for NATS message patterns. No HTTP port is opened — all traffic is NATS-only.
+  </Step>
+
+  <Step title="Send your first message">
+    Use the [`nats`](https://www.npmjs.com/package/nats) npm package to publish a `create_alumno` request and inspect the response. Create a temporary file (e.g. `test-create.mjs`) with the following content:
+
+    ```typescript
+    import { connect, JSONCodec } from 'nats';
+
+    const nc = await connect({ servers: 'nats://localhost:4222' });
+    const jc = JSONCodec();
+
+    const response = await nc.request(
+      'create_alumno',   // note: NATS subject matches the cmd
+      jc.encode({
+        nombre: 'Juan',
+        apellidoPaterno: 'García',
+        dni: '12345678',
+        email: 'juan.garcia@example.com',
+        contrasena: 'secreta123',
+      }),
+      { timeout: 5000 }
+    );
+
+    console.log(jc.decode(response.data));
+    await nc.drain();
+    ```
+
+    Run it with Node.js:
+
+    ```bash
+    node test-create.mjs
+    ```
+
+    A successful response will print the newly created student record returned by the service (with the password field omitted or hashed, depending on your response DTO).
+  </Step>
+
 </Steps>
 
 <Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
-
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
+  The `create_alumno` pattern shown above is just the starting point. See the full [Create Alumno message reference](/messages/create-alumno) for a complete list of accepted fields, validation rules, and possible error responses.
 </Tip>

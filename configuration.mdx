@@ -1,0 +1,149 @@
+---
+title: "Configure ms-alumnos environment variables"
+sidebarTitle: "Configuration"
+description: "Full reference for all ms-alumnos environment variables including NATS server URLs, PostgreSQL connection settings, and service port."
+---
+
+`ms-alumnos` validates every environment variable at process startup using a [Joi](https://joi.dev) schema defined in `src/config/envs.ts`. If any required variable is missing, has the wrong type, or cannot be parsed, the service throws immediately with a descriptive error message and **refuses to start** — preventing silent misconfiguration from reaching production. This fail-fast behaviour means you will always know exactly which variables are problematic before the first request is ever processed.
+
+## Environment file
+
+Copy `.env.example` to `.env` and fill in the values for your environment:
+
+```bash
+cp .env.example .env
+```
+
+The full contents of `.env.example` are:
+
+```bash
+PORT=3002
+NATS_SERVERS="nats://localhost:4222,nats://localhost:4223"
+
+DB_USER=postgres
+DB_PASSWORD=postgres
+DB_NAME=ms-alumnos-db
+
+DB_HOST=localhost
+DB_PORT=5435
+```
+
+<Warning>
+  Never commit your `.env` file to version control. Add `.env` to your `.gitignore` to prevent accidentally exposing database passwords and other secrets.
+</Warning>
+
+## Variable reference
+
+<ParamField query="PORT" type="number" required>
+  The port number the NestJS process binds to internally. Because `ms-alumnos` is a pure NATS microservice (no HTTP listener), this value is used by the NestJS runtime internals rather than exposed on a TCP socket to clients.
+
+  **Default (from example):** `3002`
+</ParamField>
+
+<ParamField query="NATS_SERVERS" type="string" required>
+  A comma-separated list of one or more NATS server URLs. At startup, the value is split on `,` and passed as an array to the NestJS NATS transport, which will attempt to connect to each server in order and maintain a resilient connection.
+
+  **Example:** `nats://localhost:4222,nats://localhost:4223`
+
+  For a single-server local setup you can simplify this to:
+
+  ```bash
+  NATS_SERVERS="nats://localhost:4222"
+  ```
+</ParamField>
+
+<ParamField query="DB_USER" type="string" required>
+  The PostgreSQL username the service uses to authenticate with the database. Must match the `POSTGRES_USER` value configured in your PostgreSQL instance (or the Docker Compose service).
+
+  **Default (from example):** `postgres`
+</ParamField>
+
+<ParamField query="DB_PASSWORD" type="string" required>
+  The password for the PostgreSQL user specified in `DB_USER`. Must match `POSTGRES_PASSWORD` in your PostgreSQL instance.
+
+  **Default (from example):** `postgres`
+</ParamField>
+
+<ParamField query="DB_NAME" type="string" required>
+  The name of the PostgreSQL database that `ms-alumnos` will connect to and manage. TypeORM will use this database to create and migrate the student records schema.
+
+  **Default (from example):** `ms-alumnos-db`
+</ParamField>
+
+<ParamField query="DB_HOST" type="string" required>
+  The hostname or IP address of the PostgreSQL server. When running the database inside Docker Compose and the microservice on the host machine (e.g. with `yarn start:dev`), this should be `localhost`.
+
+  **Default (from example):** `localhost`
+</ParamField>
+
+<ParamField query="DB_PORT" type="number" required>
+  The host-side TCP port on which PostgreSQL is reachable. This is the **host-mapped** port, not the internal container port (which is always `5432`). The Docker Compose configuration maps `${DB_PORT}` on the host to `5432` inside the container.
+
+  **Default (from example):** `5435`
+</ParamField>
+
+## Validation
+
+The Joi schema in `src/config/envs.ts` enforces the following rules at startup:
+
+```typescript
+const envsSchema = joi
+  .object<EnvVars>({
+    PORT: joi.number().required(),
+    NATS_SERVERS: joi.array().items(joi.string()).required(),
+
+    DB_USER: joi.string().required(),
+    DB_PASSWORD: joi.string().required(),
+    DB_NAME: joi.string().required(),
+    DB_HOST: joi.string().required(),
+    DB_PORT: joi.number().required(),
+  })
+  .unknown(true);
+```
+
+Before validation, `NATS_SERVERS` is pre-processed by splitting the raw string value on commas:
+
+```typescript
+NATS_SERVERS: process.env.NATS_SERVERS?.split(','),
+```
+
+This means you supply it as a single comma-separated string in your `.env` file, and the config module converts it to a `string[]` that NestJS hands directly to the NATS transport.
+
+Validation runs with `abortEarly: false`, so **all** invalid or missing fields are reported in a single error at startup rather than one at a time. If validation fails, the process exits with an error like:
+
+```
+Error: Config validation error: "DB_PASSWORD" is required. "DB_NAME" is required.
+```
+
+**All seven variables are required.** There are no optional variables with fallback defaults inside the service — every value must be explicitly provided in the environment.
+
+## Docker Compose defaults
+
+The included `docker-compose.yml` provisions a `postgres:15` container and reads its configuration directly from the same `.env` file via Docker Compose variable interpolation:
+
+```yaml
+services:
+  db:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "${DB_PORT}:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+volumes:
+  db_data:
+```
+
+This means:
+
+- The `POSTGRES_USER`, `POSTGRES_DB`, and `POSTGRES_PASSWORD` environment variables inside the container are automatically set to the same values you configured for the microservice — no duplication needed.
+- The host port (`DB_PORT`, default `5435`) is mapped to the container's internal PostgreSQL port (`5432`). This avoids conflicts if you already have a PostgreSQL instance running on the standard port `5432` on your machine.
+- Database files are stored in the named Docker volume `db_data`, so your data persists across `docker compose down` and `docker compose up` cycles.
+
+<Note>
+  When running the microservice with `yarn start:dev` alongside Docker Compose, set `DB_HOST=localhost` so that TypeORM connects to the database through the host-mapped port. If you run both the microservice and the database inside the same Docker network in the future, update `DB_HOST` to the service name (`db`) instead.
+</Note>

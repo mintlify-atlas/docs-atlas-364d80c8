@@ -1,0 +1,122 @@
+---
+title: "find_all_alumnos — List students with pagination"
+sidebarTitle: "find_all_alumnos"
+description: "NATS message pattern to retrieve a paginated list of alumnos. Supports page and limit parameters. Returns total count, current page, and data array."
+---
+
+Send a `find_all_alumnos` message to retrieve a paginated list of student records from the database. The service uses TypeORM's `findAndCount` method to return both the data slice and the total record count in a single query. Both `page` and `limit` are optional and default to `1` and `10` respectively when omitted.
+
+## Message pattern
+
+```json
+{ "cmd": "find_all_alumnos" }
+```
+
+## Request payload
+
+<ParamField body="page" type="number">
+  Page number to retrieve. Must be a positive integer. Defaults to `1` when omitted.
+</ParamField>
+
+<ParamField body="limit" type="number">
+  Number of records to return per page. Must be a positive integer. Defaults to `10` when omitted.
+</ParamField>
+
+## Response
+
+<ResponseField name="data" type="Alumno[]">
+  Array of alumno records for the requested page.
+
+  <Expandable title="Alumno object fields">
+    <ResponseField name="alumnoId" type="number">
+      Auto-generated primary key of the student record.
+    </ResponseField>
+    <ResponseField name="nombre" type="string">
+      First name of the student.
+    </ResponseField>
+    <ResponseField name="apellidoPaterno" type="string">
+      Paternal surname.
+    </ResponseField>
+    <ResponseField name="apellidoMaterno" type="string">
+      Maternal surname. May be `null` if not provided.
+    </ResponseField>
+    <ResponseField name="dni" type="string">
+      National ID number (8 characters).
+    </ResponseField>
+    <ResponseField name="edad" type="number">
+      Age of the student. May be `null` if not provided.
+    </ResponseField>
+    <ResponseField name="email" type="string">
+      Email address.
+    </ResponseField>
+    <ResponseField name="celular" type="string">
+      Phone number. May be `null` if not provided.
+    </ResponseField>
+    <ResponseField name="universidad" type="string">
+      University name.
+    </ResponseField>
+    <ResponseField name="facultad" type="string">
+      Faculty or school name. May be `null` if not provided.
+    </ResponseField>
+    <ResponseField name="profesion" type="string">
+      Profession. May be `null` if not provided.
+    </ResponseField>
+    <ResponseField name="grado" type="string">
+      Academic degree. May be `null` if not provided.
+    </ResponseField>
+    <ResponseField name="egresadoLocal" type="boolean">
+      Whether the student graduated locally.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="total" type="number">
+  Total number of alumno records currently in the database, regardless of the requested page or limit.
+</ResponseField>
+
+<ResponseField name="page" type="number">
+  The current page number reflected in this response.
+</ResponseField>
+
+<ResponseField name="limit" type="number">
+  The page size used to produce this response.
+</ResponseField>
+
+## Example
+
+```typescript
+import { connect, JSONCodec } from 'nats';
+
+const nc = await connect({ servers: 'nats://localhost:4222' });
+const jc = JSONCodec();
+
+const res = await nc.request(
+  'find_all_alumnos',
+  jc.encode({ page: 1, limit: 20 }),
+  { timeout: 5000 }
+);
+
+const { data, total, page, limit } = jc.decode(res.data) as any;
+console.log(`Page ${page}: ${data.length} of ${total} total records`);
+await nc.drain();
+```
+
+## Pagination math
+
+Use `total` and `limit` from the response to calculate the total number of available pages:
+
+```typescript
+const totalPages = Math.ceil(total / limit);
+```
+
+For example, if `total` is `95` and `limit` is `20`, there are `Math.ceil(95 / 20) = 5` pages. The last page (`page: 5`) will contain only 15 records.
+
+<Tip>
+  To iterate through all records programmatically, start at `page: 1` and keep incrementing until `page > Math.ceil(total / limit)`.
+</Tip>
+
+## Errors
+
+| Status | Cause |
+|--------|-------|
+| `400`  | `page` or `limit` is not a positive number (e.g. `0`, `-1`, or a non-numeric string). |

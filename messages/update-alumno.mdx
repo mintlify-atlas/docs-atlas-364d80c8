@@ -1,0 +1,162 @@
+---
+title: "update_alumno — Update an existing student record"
+sidebarTitle: "update_alumno"
+description: "NATS message pattern to partially update an alumno. Accepts UpdateAlumnoDto with a required id plus any CreateAlumnoDto fields to change."
+---
+
+Send an `update_alumno` message to partially update an existing student record. The payload must include the `id` of the target record; all other fields from `CreateAlumnoDto` are optional. The service uses TypeORM's `preload` method to merge only the supplied fields into the existing entity before saving. If no record is found for the given `id`, the service throws an `RpcException` with HTTP status `404`.
+
+## Message pattern
+
+```json
+{ "cmd": "update_alumno" }
+```
+
+## Request payload
+
+`UpdateAlumnoDto` extends `PartialType(CreateAlumnoDto)`, making every `CreateAlumnoDto` field optional while adding a required `id`.
+
+<ParamField body="id" type="number" required>
+  The `alumnoId` of the student record to update. Must be a positive integer.
+</ParamField>
+
+<ParamField body="nombre" type="string">
+  First name. Minimum 2 characters, maximum 50 characters.
+</ParamField>
+
+<ParamField body="apellidoPaterno" type="string">
+  Paternal surname. Minimum 2 characters, maximum 50 characters.
+</ParamField>
+
+<ParamField body="apellidoMaterno" type="string">
+  Maternal surname. Maximum 50 characters.
+</ParamField>
+
+<ParamField body="dni" type="string">
+  National ID number. Must be exactly 8 characters. Must remain unique.
+</ParamField>
+
+<ParamField body="edad" type="number">
+  Age of the student. Must be an integer.
+</ParamField>
+
+<ParamField body="email" type="string">
+  Email address. Must be a valid email format. Maximum 100 characters. Must remain unique.
+</ParamField>
+
+<ParamField body="celular" type="string">
+  Phone number. Maximum 15 characters.
+</ParamField>
+
+<ParamField body="universidad" type="string">
+  University name. Maximum 100 characters.
+</ParamField>
+
+<ParamField body="facultad" type="string">
+  Faculty or school name. Maximum 100 characters.
+</ParamField>
+
+<ParamField body="profesion" type="string">
+  Profession. Maximum 50 characters.
+</ParamField>
+
+<ParamField body="grado" type="string">
+  Academic degree. Maximum 50 characters.
+</ParamField>
+
+<ParamField body="egresadoLocal" type="boolean">
+  Whether the student graduated locally.
+</ParamField>
+
+<ParamField body="contrasena" type="string">
+  New password in plaintext. Minimum 6 characters, maximum 60 characters. See the warning below before using this field.
+</ParamField>
+
+## Response
+
+The updated `Alumno` entity reflecting all applied changes.
+
+<ResponseField name="alumnoId" type="number">
+  Primary key of the student record.
+</ResponseField>
+
+<ResponseField name="nombre" type="string">
+  First name of the student.
+</ResponseField>
+
+<ResponseField name="apellidoPaterno" type="string">
+  Paternal surname.
+</ResponseField>
+
+<ResponseField name="apellidoMaterno" type="string">
+  Maternal surname. May be `null`.
+</ResponseField>
+
+<ResponseField name="dni" type="string">
+  National ID number (8 characters).
+</ResponseField>
+
+<ResponseField name="edad" type="number">
+  Age of the student. May be `null`.
+</ResponseField>
+
+<ResponseField name="email" type="string">
+  Email address.
+</ResponseField>
+
+<ResponseField name="celular" type="string">
+  Phone number. May be `null`.
+</ResponseField>
+
+<ResponseField name="universidad" type="string">
+  University name.
+</ResponseField>
+
+<ResponseField name="facultad" type="string">
+  Faculty or school name. May be `null`.
+</ResponseField>
+
+<ResponseField name="profesion" type="string">
+  Profession. May be `null`.
+</ResponseField>
+
+<ResponseField name="grado" type="string">
+  Academic degree. May be `null`.
+</ResponseField>
+
+<ResponseField name="egresadoLocal" type="boolean">
+  Whether the student graduated locally.
+</ResponseField>
+
+## Example
+
+```typescript
+import { connect, JSONCodec } from 'nats';
+
+const nc = await connect({ servers: 'nats://localhost:4222' });
+const jc = JSONCodec();
+
+const res = await nc.request(
+  'update_alumno',
+  jc.encode({
+    id: 1,
+    facultad: 'Facultad de Ingeniería de Sistemas',
+    grado: 'Magíster',
+  }),
+  { timeout: 5000 }
+);
+
+console.log(jc.decode(res.data));
+await nc.drain();
+```
+
+## Errors
+
+| Status | Cause |
+|--------|-------|
+| `404`  | No alumno exists with the given `id`. The exception payload is `{ "status": 404, "message": "Alumno #1 not found" }`. |
+| `400`  | Validation failed on one or more supplied fields (e.g. a string exceeds its maximum length, `email` is malformed, `dni` is not 8 characters, or `contrasena` is shorter than 6 characters). |
+
+<Warning>
+  Updating `contrasena` via this message **does NOT re-hash the password**. The `@BeforeInsert()` bcrypt hook on the `Alumno` entity only fires during an initial insert, not on subsequent saves. Sending a new `contrasena` value through `update_alumno` will overwrite the stored hash with the **plaintext** string. To update a password securely, implement a dedicated password-change handler that calls `bcrypt.hash()` explicitly before saving.
+</Warning>

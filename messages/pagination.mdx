@@ -1,0 +1,124 @@
+---
+title: "Pagination in ms-alumnos"
+sidebarTitle: "Pagination"
+description: "How ms-alumnos implements offset-based pagination for the find_all_alumnos pattern using PaginationDto with page and limit parameters."
+---
+
+ms-alumnos uses offset-based (page / limit) pagination for the `find_all_alumnos` message pattern. Rather than accepting a raw SQL offset, the service exposes two intuitive parameters — `page` and `limit` — via the `PaginationDto` class defined in `src/common/dto/pagionation.dto.ts`. Both parameters are optional and default to sensible values, so callers that omit them will always receive the first 10 records.
+
+## PaginationDto fields
+
+<ParamField body="page" type="number" default="1">
+  The 1-based page number to retrieve. Must be a positive integer
+  (`@IsPositive()`). Omitting this field is equivalent to passing `1`.
+</ParamField>
+
+<ParamField body="limit" type="number" default="10">
+  The maximum number of records to return in a single response. Must be a
+  positive integer (`@IsPositive()`). Omitting this field is equivalent to
+  passing `10`.
+</ParamField>
+
+## How pagination works
+
+`AlumnosService.findAll()` calls TypeORM's `findAndCount` method with a computed `skip` offset and the requested `take` window:
+
+```typescript
+async findAll(
+  page = 1,
+  limit = 10,
+): Promise<{ data: Alumno[]; total: number; page: number; limit: number }> {
+  const [data, total] = await this.alumnoRepository.findAndCount({
+    skip: (page - 1) * limit,
+    take: limit,
+  });
+  return { total, page, limit, data };
+}
+```
+
+The formula `skip: (page - 1) * limit` translates the human-friendly page number into a zero-based SQL `OFFSET`. For example, `page: 3` with `limit: 10` produces `skip: 20`, meaning the query skips the first 20 rows and returns rows 21–30. `findAndCount` issues a single query that returns both the page of records and the total row count, avoiding a separate `COUNT(*)` round-trip.
+
+## Response shape
+
+<ResponseField name="data" type="Alumno[]">
+  The array of `Alumno` records for the requested page. May be an empty array
+  `[]` if `page` exceeds the available data.
+</ResponseField>
+
+<ResponseField name="total" type="number">
+  Total count of all `Alumno` records currently in the table, regardless of the
+  requested page or limit.
+</ResponseField>
+
+<ResponseField name="page" type="number">
+  The page number that was used to generate this response. Mirrors the `page`
+  value sent in the request (or `1` if it was omitted).
+</ResponseField>
+
+<ResponseField name="limit" type="number">
+  The limit that was used to generate this response. Mirrors the `limit` value
+  sent in the request (or `10` if it was omitted).
+</ResponseField>
+
+## Calculating total pages
+
+Use `total` and `limit` from the response to derive navigation metadata on the client side:
+
+```typescript
+const { data, total, page, limit } = jc.decode(res.data);
+
+const totalPages = Math.ceil(total / limit);
+const hasNextPage = page < totalPages;
+const hasPrevPage = page > 1;
+```
+
+## Example requests
+
+```typescript
+import { connect, JSONCodec } from 'nats';
+
+const nc = await connect({ servers: 'nats://localhost:4222' });
+const jc = JSONCodec();
+
+// First page — equivalent to omitting both parameters
+const page1 = await nc.request(
+  'find_all_alumnos',
+  jc.encode({ page: 1, limit: 10 }),
+  { timeout: 5000 }
+);
+console.log(jc.decode(page1.data));
+// { data: [...], total: 100, page: 1, limit: 10 }
+
+// Second page
+const page2 = await nc.request(
+  'find_all_alumnos',
+  jc.encode({ page: 2, limit: 10 }),
+  { timeout: 5000 }
+);
+console.log(jc.decode(page2.data));
+// { data: [...], total: 100, page: 2, limit: 10 }
+
+// Determine and request the last page dynamically
+const { total, limit: usedLimit } = jc.decode(page1.data);
+const lastPage = Math.ceil(total / usedLimit);
+
+const lastRes = await nc.request(
+  'find_all_alumnos',
+  jc.encode({ page: lastPage, limit: usedLimit }),
+  { timeout: 5000 }
+);
+console.log(jc.decode(lastRes.data));
+// { data: [...], total: 100, page: 10, limit: 10 }
+
+await nc.drain();
+```
+
+<Tip>
+  To fetch all records in a single request (for example, to populate a dropdown
+  or export data), set `limit` to a value larger than the total record count —
+  for instance `{ page: 1, limit: 9999 }`. This works fine for small tables,
+  but for large datasets it will load the entire table into memory on both the
+  service and the caller side. For any table with more than a few hundred rows,
+  always paginate and process records page by page to keep memory usage and
+  response times predictable.
+</Tip>

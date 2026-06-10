@@ -1,23 +1,11 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
-  "name": "ms-alumnos",
+  "projectType": "api-service",
+  "projectName": "ms-alumnos",
+  "projectDescription": "A NestJS microservice for managing student (alumno) records, communicating over NATS messaging and backed by a PostgreSQL database.",
   "theme": "luma",
-  "colors": {
-    "primary": "#4F46E5",
-    "light": "#EEF2FF",
-    "dark": "#1E1B4B"
-  },
-  "navbar": {
-    "primary": {
-      "type": "github",
-      "href": "https://github.com/Distribuidos-Org/ms-alumnos"
-    }
-  },
-  "footer": {
-    "socials": {
-      "github": "https://github.com/Distribuidos-Org/ms-alumnos"
-    }
-  },
+  "primaryColor": "#4F46E5",
+  "lightColor": "#EEF2FF",
+  "darkColor": "#1E1B4B",
   "navigation": {
     "tabs": [
       {
@@ -78,5 +66,24 @@
         ]
       }
     ]
-  }
+  },
+  "keyFeatures": [
+    "CRUD operations for student records over NATS message patterns",
+    "PostgreSQL persistence via TypeORM with auto-schema synchronization",
+    "bcrypt password hashing on insert via TypeORM lifecycle hook",
+    "Input validation with class-validator (whitelist + forbidNonWhitelisted)",
+    "Paginated list endpoint with configurable page and limit",
+    "Global RPC exception filter that maps validation and HTTP errors to RpcException",
+    "Environment-validated configuration using Joi schema",
+    "Docker Compose setup for local PostgreSQL development",
+    "Database seed command that loads 100 sample student records"
+  ],
+  "publicApiSurface": [
+    "{ cmd: 'create_alumno' } — CreateAlumnoDto → Alumno",
+    "{ cmd: 'find_all_alumnos' } — PaginationDto → { data, total, page, limit }",
+    "{ cmd: 'find_one_alumno' } — { id: number } → Alumno",
+    "{ cmd: 'update_alumno' } — UpdateAlumnoDto → Alumno",
+    "{ cmd: 'remove_alumno' } — { id: number } → { message }",
+    "{ cmd: 'seed_alumnos' } — (none) → { message, count }"
+  ]
 }

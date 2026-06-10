@@ -1,0 +1,176 @@
+---
+title: "NATS messaging transport in ms-alumnos"
+sidebarTitle: "NATS Messaging"
+description: "How ms-alumnos uses NATS as its sole transport: message patterns, payload routing, multi-server configuration, and RPC request-reply semantics."
+---
+
+`ms-alumnos` uses NATS as its **exclusive transport layer** via `@nestjs/microservices` with `Transport.NATS`. There are no HTTP endpoints, no REST controllers, and no TCP listeners — every operation is invoked by sending a NATS message to the appropriate subject and waiting for the reply. This design makes the service fully decoupled from any particular HTTP gateway and easy to scale horizontally behind a NATS cluster.
+
+---
+
+## Message patterns
+
+Every student operation is exposed via the `@MessagePattern` decorator with a `cmd` discriminator. When a NATS message arrives whose subject matches a registered pattern, NestJS dispatches it to the corresponding handler in `AlumnosController`.
+
+The following six commands are available:
+
+| `cmd` value | Handler | Description |
+|---|---|---|
+| `create_alumno` | `AlumnosController.create` | Creates a new student record from a `CreateAlumnoDto` payload. |
+| `find_all_alumnos` | `AlumnosController.findAll` | Returns a paginated list of students. Accepts `{ page, limit }` via `PaginationDto`. |
+| `find_one_alumno` | `AlumnosController.findOne` | Fetches a single student by numeric `id`. |
+| `update_alumno` | `AlumnosController.update` | Updates an existing student. Payload must include `id` plus any fields to change (`UpdateAlumnoDto`). |
+| `remove_alumno` | `AlumnosController.remove` | Deletes a student by numeric `id`. Returns a confirmation message on success. |
+
+The full controller implementation is shown below:
+
+```typescript
+import { Controller, ParseIntPipe } from '@nestjs/common';
+import { MessagePattern, Payload } from '@nestjs/microservices';
+import { AlumnosService } from './alumnos.service';
+import { CreateAlumnoDto } from './dto/create-alumno.dto';
+import { UpdateAlumnoDto } from './dto/update-alumno.dto';
+import { PaginationDto } from 'src/common/dto/pagionation.dto';
+
+@Controller('alumnos')
+export class AlumnosController {
+  constructor(private readonly alumnosService: AlumnosService) {}
+
+  @MessagePattern({ cmd: 'create_alumno' })
+  create(@Payload() createAlumnoDto: CreateAlumnoDto) {
+    return this.alumnosService.create(createAlumnoDto);
+  }
+
+  @MessagePattern({ cmd: 'find_all_alumnos' })
+  findAll(@Payload() paginationDto: PaginationDto) {
+    const { page, limit } = paginationDto;
+    return this.alumnosService.findAll(page, limit);
+  }
+
+  @MessagePattern({ cmd: 'find_one_alumno' })
+  findOne(@Payload('id', ParseIntPipe) id: number) {
+    return this.alumnosService.findOne(id);
+  }
+
+  @MessagePattern({ cmd: 'update_alumno' })
+  update(@Payload() updateAlumnoDto: UpdateAlumnoDto) {
+    return this.alumnosService.update(updateAlumnoDto.id, updateAlumnoDto);
+  }
+
+  @MessagePattern({ cmd: 'remove_alumno' })
+  remove(@Payload('id', ParseIntPipe) id: number) {
+    return this.alumnosService.remove(id);
+  }
+}
+```
+
+---
+
+## Request-reply semantics
+
+NATS supports two messaging models: **publish-subscribe** (fire-and-forget) and **request-reply** (synchronous RPC). `ms-alumnos` uses **request-reply** for all operations.
+
+In request-reply mode:
+1. The caller publishes a message to a subject (e.g. `{ cmd: 'find_one_alumno' }`) and includes a private **reply subject** in the message envelope.
+2. `ms-alumnos` processes the message, then publishes its response to that reply subject.
+3. The caller receives the response on the reply subject, completing the round-trip.
+
+This is exactly what `ClientProxy.send()` does in NestJS — it transparently manages the reply subject and returns an `Observable` that resolves when the reply arrives. It is fundamentally different from `ClientProxy.emit()`, which publishes with no reply subject (fire-and-forget) and cannot be used to retrieve data.
+
+---
+
+## Multi-server configuration
+
+`ms-alumnos` supports connecting to multiple NATS servers for redundancy and load distribution. The `NATS_SERVERS` environment variable is a **comma-separated list** of server URLs. `src/config/envs.ts` splits this string into an array and validates it with Joi before the application starts:
+
+```typescript
+// src/config/envs.ts
+import 'dotenv/config';
+import * as joi from 'joi';
+
+const envsSchema = joi
+  .object({
+    PORT: joi.number().required(),
+    NATS_SERVERS: joi.array().items(joi.string()).required(),
+    // ...database vars
+  })
+  .unknown(true);
+
+const validatedEnvs = envsSchema.validate(
+  {
+    ...process.env,
+    NATS_SERVERS: process.env.NATS_SERVERS?.split(','),
+  },
+  { abortEarly: false },
+);
+
+export const envs = {
+  port: validatedEnvs.value.PORT,
+  natsServers: validatedEnvs.value.NATS_SERVERS, // string[]
+  // ...
+};
+```
+
+The resulting `envs.natsServers` array is passed directly to the transport options in `main.ts`:
+
+```typescript
+const app = await NestFactory.createMicroservice(AppModule, {
+  transport: Transport.NATS,
+  options: {
+    servers: envs.natsServers, // e.g. ['nats://nats1:4222', 'nats://nats2:4222']
+  },
+});
+```
+
+A `.env` entry for multiple servers looks like:
+
+```bash
+NATS_SERVERS=nats://nats1:4222,nats://nats2:4222,nats://nats3:4222
+```
+
+<Tip>
+  Run at least two NATS servers in production and list all of them in `NATS_SERVERS`. The NATS client library will automatically reconnect to a surviving server if the one it is currently connected to goes down, giving you high availability with no code changes required.
+</Tip>
+
+---
+
+## Connecting from another service
+
+Any service that needs to communicate with `ms-alumnos` can use the `nats` npm package directly for a lightweight, low-dependency connection. The example below demonstrates a full request-reply round-trip for `find_one_alumno`:
+
+```typescript
+import { connect, JSONCodec } from 'nats';
+
+async function getAlumno(id: number) {
+  // Connect to the same NATS cluster
+  const nc = await connect({ servers: ['nats://localhost:4222'] });
+  const jc = JSONCodec();
+
+  // Send a request and wait for the reply (5-second timeout)
+  const response = await nc.request(
+    // NestJS serialises { cmd } as the subject key
+    JSON.stringify({ cmd: 'find_one_alumno' }),
+    jc.encode({ id }),
+    { timeout: 5000 },
+  );
+
+  const alumno = jc.decode(response.data);
+  console.log('Received alumno:', alumno);
+
+  await nc.drain();
+}
+
+getAlumno(1);
+```
+
+In practice, services within the same NestJS ecosystem use `ClientProxy` via `@nestjs/microservices`, which provides the same request-reply behaviour with full TypeScript integration and Observable-based error handling.
+
+---
+
+## Error propagation
+
+When a handler throws — whether from a failed database lookup, a DTO validation failure, or any other condition — the `MicroserviceExceptionFilter` intercepts the exception and wraps it as an `RpcException` with a structured `{ status, message }` payload. This error object travels back to the caller over the NATS reply subject, exactly as a successful response would.
+
+The caller receives a rejected Observable (or a thrown error if using `await`). The `client-gateway` is responsible for mapping the `status` field back to an HTTP status code before responding to the original HTTP client.
+
+For the full exception-handling flow, see [Error Handling](/development/error-handling).

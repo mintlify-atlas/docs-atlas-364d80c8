@@ -1,0 +1,130 @@
+---
+title: "Running tests in ms-alumnos"
+sidebarTitle: "Tests"
+description: "How to run unit tests and end-to-end tests for ms-alumnos using Jest and the NestJS testing utilities."
+---
+
+ms-alumnos uses [Jest](https://jestjs.io/) as its test runner for both unit tests and end-to-end (e2e) tests. Unit tests are configured through the `jest` section inside `package.json` and live alongside their source files under `src/`. End-to-end tests use a separate configuration file at `test/jest-e2e.json` and live in the `test/` directory.
+
+## Test scripts
+
+The following scripts are available in `package.json`:
+
+| Script | Command | Purpose |
+|---|---|---|
+| `yarn test` | `jest` | Run all unit tests once |
+| `yarn test:watch` | `jest --watch` | Re-run unit tests on file change |
+| `yarn test:cov` | `jest --coverage` | Run unit tests and generate a coverage report |
+| `yarn test:debug` | `node --inspect-brk … jest --runInBand` | Run unit tests with the Node.js inspector attached for debugging |
+| `yarn test:e2e` | `jest --config ./test/jest-e2e.json` | Run end-to-end tests using the e2e Jest config |
+
+Run any script from the project root:
+
+```bash
+yarn test
+yarn test:watch
+yarn test:cov
+yarn test:e2e
+yarn test:debug
+```
+
+## Unit test configuration
+
+The `jest` section in `package.json` controls how unit tests are discovered and compiled:
+
+```json
+{
+  "jest": {
+    "moduleFileExtensions": ["js", "json", "ts"],
+    "rootDir": "src",
+    "testRegex": ".*\\.spec\\.ts$",
+    "transform": {
+      "^.+\\.(t|j)s$": "ts-jest"
+    },
+    "collectCoverageFrom": [
+      "**/*.(t|j)s"
+    ],
+    "coverageDirectory": "../coverage",
+    "testEnvironment": "node"
+  }
+}
+```
+
+Key settings:
+
+- **`rootDir: "src"`** — Jest searches for test files only inside the `src/` directory, keeping test discovery scoped to the application source.
+- **`testRegex: ".*\\.spec\\.ts$"`** — any file ending in `.spec.ts` under `src/` is treated as a unit test file.
+- **`transform`** — `ts-jest` compiles TypeScript files on the fly so Jest can execute them directly without a separate build step.
+- **`collectCoverageFrom`** — when running with `--coverage`, Jest collects coverage data from every `.ts` and `.js` file under `src/`.
+- **`testEnvironment: "node"`** — tests run in a plain Node.js environment (no browser DOM simulation).
+
+## E2E test configuration
+
+End-to-end tests use a dedicated config file at `test/jest-e2e.json`:
+
+```json
+{
+  "moduleFileExtensions": ["js", "json", "ts"],
+  "rootDir": ".",
+  "testEnvironment": "node",
+  "testRegex": ".e2e-spec.ts$",
+  "transform": {
+    "^.+\\.(t|j)s$": "ts-jest"
+  }
+}
+```
+
+Key differences from the unit config:
+
+- **`rootDir: "."`** — the root is set to the project root (one level above `src/`), so Jest can locate files in the `test/` directory.
+- **`testRegex: ".e2e-spec.ts$"`** — only files ending in `.e2e-spec.ts` are picked up, keeping e2e and unit tests cleanly separated.
+
+The e2e config does not set `coverageDirectory` — coverage collection for e2e tests is not configured by default.
+
+## Running tests with coverage
+
+```bash
+yarn test:cov
+```
+
+Jest runs every `*.spec.ts` file under `src/`, then writes an HTML and LCOV coverage report to the `coverage/` directory at the project root (one level above `src/`, as set by `coverageDirectory: "../coverage"`). Open `coverage/lcov-report/index.html` in a browser to browse the interactive per-file breakdown.
+
+## E2E test file
+
+The scaffolded e2e test lives at `test/app.e2e-spec.ts`. It bootstraps the full `AppModule` using NestJS's `TestingModule` and uses `supertest` to make HTTP requests against the application:
+
+```typescript
+import { Test, TestingModule } from '@nestjs/testing';
+import { INestApplication } from '@nestjs/common';
+import * as request from 'supertest';
+import { App } from 'supertest/types';
+import { AppModule } from './../src/app.module';
+
+describe('AppController (e2e)', () => {
+  let app: INestApplication<App>;
+
+  beforeEach(async () => {
+    const moduleFixture: TestingModule = await Test.createTestingModule({
+      imports: [AppModule],
+    }).compile();
+
+    app = moduleFixture.createNestApplication();
+    await app.init();
+  });
+
+  it('/ (GET)', () => {
+    return request(app.getHttpServer())
+      .get('/')
+      .expect(200)
+      .expect('Hello World!');
+  });
+});
+```
+
+<Note>
+  The default e2e spec tests the HTTP layer. To add integration tests for NATS message handlers, extend this file by creating a NestJS `ClientProxy` in the test setup, connecting it to the same NATS server, and sending messages via `client.send({ cmd: 'your_pattern' }, payload).toPromise()`. Make sure to close the client in an `afterAll` hook to avoid open handle warnings.
+</Note>
+
+<Tip>
+  Before running e2e tests, ensure PostgreSQL is up and all required environment variables (`DATABASE_URL`, `NATS_SERVERS`, etc.) are set. The quickest way to satisfy the database requirement is to start the Docker Compose stack with `docker compose up -d` and then run `yarn test:e2e`.
+</Tip>

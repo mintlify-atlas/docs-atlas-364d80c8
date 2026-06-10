@@ -1,0 +1,132 @@
+---
+title: "ms-alumnos architecture and system design"
+sidebarTitle: "Overview"
+description: "How ms-alumnos fits into a distributed system: NATS transport, NestJS modules, TypeORM persistence, and the API gateway integration pattern."
+---
+
+`ms-alumnos` is a NestJS microservice that manages university student records in a distributed system. It is bootstrapped with `NestFactory.createMicroservice` — meaning it exposes **no HTTP server** whatsoever. All communication is handled exclusively over [NATS](https://nats.io/) using the `@nestjs/microservices` package with `Transport.NATS`. Incoming messages are dispatched to handlers in `AlumnosController`, which delegates business logic to `AlumnosService`, which in turn persists data to a PostgreSQL database via TypeORM.
+
+---
+
+## Modules
+
+The application is composed of three NestJS modules, each with a distinct responsibility:
+
+| Module | Responsibility |
+|---|---|
+| `AppModule` | Root module — bootstraps `ConfigModule` (global env validation) and `TypeOrmModule` (PostgreSQL connection), then imports feature modules. |
+| `AlumnosModule` | Feature module — wires together `AlumnosController`, `AlumnosService`, and the `Alumno` TypeORM entity repository. Handles all student CRUD operations. |
+| `SeedModule` | Utility module — provides a data-seeding mechanism for populating the database with initial or test records. |
+
+```
+AppModule
+├── ConfigModule (global: true)
+├── TypeOrmModule (PostgreSQL connection)
+├── AlumnosModule
+│   ├── AlumnosController   ← @MessagePattern handlers
+│   ├── AlumnosService      ← business + persistence logic
+│   └── TypeOrmModule.forFeature([Alumno])
+└── SeedModule
+```
+
+---
+
+## Request flow
+
+A complete round-trip from API gateway to database and back follows these steps:
+
+<Steps>
+  <Step title="HTTP request arrives at the API gateway">
+    An external client sends an HTTP request (e.g. `POST /alumnos`) to the `client-gateway` service. The gateway validates and transforms the request into a NATS message payload.
+  </Step>
+  <Step title="Gateway publishes a NATS request">
+    The gateway calls `client.send({ cmd: 'create_alumno' }, payload)` over NATS using request-reply semantics. The message is routed to any available `ms-alumnos` instance subscribed to that subject.
+  </Step>
+  <Step title="AlumnosController receives the message">
+    The `@MessagePattern({ cmd: 'create_alumno' })` handler in `AlumnosController` is invoked. NestJS deserialises the payload into a typed DTO and runs `ValidationPipe` to enforce constraints before the handler body executes.
+  </Step>
+  <Step title="AlumnosService executes business logic">
+    The controller delegates to `AlumnosService`, which uses the injected TypeORM `Repository<Alumno>` to create, query, update, or delete records. Any domain error (e.g. record not found) is thrown as an `RpcException`.
+  </Step>
+  <Step title="TypeORM persists to PostgreSQL">
+    TypeORM translates the repository call into a SQL statement and executes it against the PostgreSQL database. The result (entity or error) is returned to the service.
+  </Step>
+  <Step title="Response travels back over NATS">
+    The return value from the controller handler is serialised and sent back to the gateway on the NATS reply subject. If an `RpcException` was thrown, `MicroserviceExceptionFilter` catches it and sends a structured error response instead.
+  </Step>
+  <Step title="Gateway responds to the HTTP client">
+    The `client-gateway` receives the NATS response, maps it to an HTTP status code and body, and returns it to the original HTTP caller.
+  </Step>
+</Steps>
+
+---
+
+## Integration with client-gateway
+
+<Note>
+  `ms-alumnos` is designed to be consumed by the [client-gateway](https://github.com/Distribuidos-Org/client-gateway) service. The gateway is the **only** entry point for external clients — it translates inbound HTTP requests into NATS `send()` calls and maps NATS responses (or errors) back into HTTP responses. `ms-alumnos` itself never listens on a TCP port and is not directly reachable from outside the NATS cluster.
+</Note>
+
+This separation of concerns means:
+- **ms-alumnos** owns data validation (DTOs + `ValidationPipe`), persistence, and business rules.
+- **client-gateway** owns HTTP routing, authentication middleware, and HTTP-level error formatting.
+
+---
+
+## Startup
+
+The application entry point at `src/main.ts` bootstraps the microservice, registers global middleware, and starts listening on NATS:
+
+```typescript
+import { NestFactory } from '@nestjs/core';
+import { Logger, ValidationPipe } from '@nestjs/common';
+import { Transport } from '@nestjs/microservices';
+import { AppModule } from './app.module';
+import { MicroserviceExceptionFilter } from './common/filters/microservice-exception.filter';
+import { envs } from './config/envs';
+
+async function bootstrap() {
+  const app = await NestFactory.createMicroservice(AppModule, {
+    transport: Transport.NATS,
+    options: {
+      servers: envs.natsServers,
+    },
+  });
+
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+    }),
+  );
+
+  app.useGlobalFilters(new MicroserviceExceptionFilter());
+
+  await app.listen();
+
+  Logger.log(
+    `Alumnos microservice running on NATS servers: ${envs.natsServers.join(', ')}`,
+    'Bootstrap',
+  );
+}
+bootstrap();
+```
+
+Two global registrations happen at startup:
+
+**`ValidationPipe`** — Applied to every incoming message payload before the handler is called. The options `whitelist: true` strips any properties not declared in the DTO, and `forbidNonWhitelisted: true` causes the pipe to throw a `BadRequestException` if any unknown property is present. This keeps message payloads strictly typed end-to-end.
+
+**`MicroserviceExceptionFilter`** — A catch-all exception filter that intercepts all unhandled exceptions, normalises them into `RpcException` objects (preserving HTTP status codes where applicable), and returns them as structured error payloads over NATS. See [Error Handling](/development/error-handling) for details.
+
+---
+
+## Explore further
+
+<CardGroup cols={2}>
+  <Card title="NATS Messaging" icon="tower-broadcast" href="/architecture/nats-messaging">
+    Message patterns, request-reply semantics, multi-server configuration, and how to connect from another service.
+  </Card>
+  <Card title="Database" icon="database" href="/architecture/database">
+    PostgreSQL schema, TypeORM entity definition, password hashing, and Docker Compose setup.
+  </Card>
+</CardGroup>

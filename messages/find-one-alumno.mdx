@@ -1,0 +1,100 @@
+---
+title: "find_one_alumno — Retrieve a student by ID"
+sidebarTitle: "find_one_alumno"
+description: "NATS message pattern to fetch a single alumno by their numeric ID. Returns the full Alumno record or a 404 RpcException if not found."
+---
+
+Send a `find_one_alumno` message to retrieve a single student record by its primary key. The controller extracts the `id` field from the payload using NestJS `ParseIntPipe`, then delegates to the service which queries by `alumnoId`. If no matching record exists, the service throws an `RpcException` with HTTP status `404`.
+
+## Message pattern
+
+```json
+{ "cmd": "find_one_alumno" }
+```
+
+## Request payload
+
+<ParamField body="id" type="number" required>
+  The numeric `alumnoId` of the student to retrieve. Must be a positive integer.
+</ParamField>
+
+## Response
+
+The full `Alumno` entity for the matching record.
+
+<ResponseField name="alumnoId" type="number">
+  Primary key of the student record.
+</ResponseField>
+
+<ResponseField name="nombre" type="string">
+  First name of the student.
+</ResponseField>
+
+<ResponseField name="apellidoPaterno" type="string">
+  Paternal surname.
+</ResponseField>
+
+<ResponseField name="apellidoMaterno" type="string">
+  Maternal surname. May be `null` if not provided at creation.
+</ResponseField>
+
+<ResponseField name="dni" type="string">
+  National ID number (8 characters).
+</ResponseField>
+
+<ResponseField name="edad" type="number">
+  Age of the student. May be `null` if not provided.
+</ResponseField>
+
+<ResponseField name="email" type="string">
+  Email address.
+</ResponseField>
+
+<ResponseField name="celular" type="string">
+  Phone number. May be `null` if not provided.
+</ResponseField>
+
+<ResponseField name="universidad" type="string">
+  University name.
+</ResponseField>
+
+<ResponseField name="facultad" type="string">
+  Faculty or school name. May be `null` if not provided.
+</ResponseField>
+
+<ResponseField name="profesion" type="string">
+  Profession. May be `null` if not provided.
+</ResponseField>
+
+<ResponseField name="grado" type="string">
+  Academic degree. May be `null` if not provided.
+</ResponseField>
+
+<ResponseField name="egresadoLocal" type="boolean">
+  Whether the student graduated locally.
+</ResponseField>
+
+## Example
+
+```typescript
+import { connect, JSONCodec } from 'nats';
+
+const nc = await connect({ servers: 'nats://localhost:4222' });
+const jc = JSONCodec();
+
+const res = await nc.request(
+  'find_one_alumno',
+  jc.encode({ id: 1 }),
+  { timeout: 5000 }
+);
+
+console.log(jc.decode(res.data));
+await nc.drain();
+```
+
+## Errors
+
+| Status | Cause |
+|--------|-------|
+| `404`  | No alumno exists with the given `id`. The exception payload is `{ "status": 404, "message": "Alumno #1 not found" }` (where `1` is the requested ID). |
+| `400`  | The `id` field is missing or cannot be parsed as a valid integer by `ParseIntPipe`. |
